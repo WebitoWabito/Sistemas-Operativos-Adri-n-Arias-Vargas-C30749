@@ -1,2 +1,2 @@
-Estudiante: Adrián Arias Vargas
-Descripción: Traeas, trabajos, proyectos correspondientes al curso de Sistemas Operativos G3
+Estudiante: Adrián Arias Vargas C30749
+Descripción: Tareas, trabajos, proyectos correspondientes al curso de Sistemas Operativos G3
