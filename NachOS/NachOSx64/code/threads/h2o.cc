@@ -43,18 +43,15 @@ void H2O::oxygen() {
     
     oxygenCount++;
     
-    // If we have 2 hydrogens and 1 oxygen, form water
     if (hydrogenCount >= 2 && oxygenCount >= 1) {
         hydrogenCount -= 2;
         oxygenCount -= 1;
         printf("H2O molecule formed!\n");
         
-        // Signal hydrogens and other oxygen
         hydrogenCond->Signal(lock);
         hydrogenCond->Signal(lock);
         oxygenCond->Signal(lock);
     } else {
-        // Wait for hydrogens
         oxygenCond->Wait(lock);
     }
     

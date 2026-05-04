@@ -156,9 +156,6 @@ bool Lock::isHeldByCurrentThread() {
 }
 
 
-// Condition class implementation
-// Condition variables use a queue of threads
-
 Condition::Condition(const char* debugName) {
     name = (char *)debugName;
     waitQueue = new List<Thread*>;

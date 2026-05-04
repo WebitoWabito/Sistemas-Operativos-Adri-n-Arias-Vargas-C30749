@@ -14,8 +14,10 @@
 #include "copyright.h"
 #include "system.h"
 #include "diningph.h"
+#include "h2o.h"
 
 DiningPh * dp;
+H2O * h2o;
 
 void Philo( void * p ) {
 
@@ -42,6 +44,31 @@ void Philo( void * p ) {
         sleep( thinks );
     }
 
+}
+
+void HydrogenThread( void * p ) {
+    long who = (long) p;
+    
+    for ( int i = 0; i < 5; i++ ) {
+        printf("Hydrogen %ld: looking for partner\n", who);
+        currentThread->Yield();
+        h2o->hydrogen();
+        printf("Hydrogen %ld: formed H2O molecule %d\n", who, i + 1);
+        currentThread->Yield();
+    }
+}
+
+
+void OxygenThread( void * p ) {
+    long who = (long) p;
+    
+    for ( int i = 0; i < 5; i++ ) {
+        printf("Oxygen %ld: looking for partners\n", who);
+        currentThread->Yield();
+        h2o->oxygen();
+        printf("Oxygen %ld: formed H2O molecule %d\n", who, i + 1);
+        currentThread->Yield();
+    }
 }
 
 
@@ -95,6 +122,7 @@ TestH2O()
         t = new Thread( "O" );
         t->Fork( OxygenThread, (void *) k );
     }
+    // To test dp, comment this test and uncomment the ThreadTest
 }
 
 
@@ -105,18 +133,19 @@ TestH2O()
 //	SimpleThread ourselves.
 //----------------------------------------------------------------------
 
-void
+/*void
 ThreadTest()
 {
-    Thread * Ph;
-
     DEBUG('t', "Entering SimpleTest");
 
+    // Run Dining Philosophers Problem (default)
     dp = new DiningPh();
-
+    Thread * Ph;
     for ( long k = 0; k < 5; k++ ) {
         Ph = new Thread( "dp" );
         Ph->Fork( Philo, (void *) k );
     }
-}
 
+    //To test h2o comment this test and uncomment the H2O test
+}
+*/
