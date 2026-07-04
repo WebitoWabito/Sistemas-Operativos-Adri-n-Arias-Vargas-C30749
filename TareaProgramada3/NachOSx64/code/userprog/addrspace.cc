@@ -18,7 +18,6 @@
 #include "copyright.h"
 #include "system.h"
 #include "addrspace.h"
-#include "noff.h"
 #include <string.h>
  
 //----------------------------------------------------------------------
@@ -43,6 +42,48 @@ SwapHeader (NoffHeader *noffH)
     noffH->uninitData.inFileAddr = WordToHost(noffH->uninitData.inFileAddr);
 }
  
+#ifdef VM
+
+static PageType
+ClassifyPage(unsigned int vpn, NoffHeader *noffH, unsigned int numPages)
+{
+    PageType type = PAGE_CODE;
+ 
+    if (noffH->initData.size > 0) {
+        unsigned int dataStart = noffH->initData.virtualAddr / PageSize;
+        if (vpn >= dataStart)
+            type = PAGE_INIT_DATA;
+    }
+ 
+    if (noffH->uninitData.size > 0) {
+        unsigned int bssStart = noffH->uninitData.virtualAddr / PageSize;
+        if (vpn >= bssStart)
+            type = PAGE_UNINIT_DATA;
+    }
+ 
+    unsigned int stackPages = divRoundUp(UserStackSize, PageSize);
+    unsigned int stackStart = numPages - stackPages;
+    if (vpn >= stackStart)
+        type = PAGE_STACK;
+ 
+    return type;
+}
+ 
+static void
+FillPageContent(char *dest, unsigned int vpn, PageType type,
+                 NoffHeader *noffH, OpenFile *executableFile)
+{
+    bzero(dest, PageSize);
+ 
+    if (type == PAGE_CODE || type == PAGE_INIT_DATA) {
+        //El archivo noff guarda el codigo y los datos inicializados de forma contigua, tanto en direcciones virtuales como en el archivo
+        int fileAddr = noffH->code.inFileAddr +
+                       (vpn * PageSize - noffH->code.virtualAddr);
+        executableFile->ReadAt(dest, PageSize, fileAddr);
+    }
+}
+#endif // VM
+ 
 //----------------------------------------------------------------------
 // AddrSpace::AddrSpace
 // 	Create an address space to run a user program.
@@ -60,22 +101,48 @@ SwapHeader (NoffHeader *noffH)
  
 AddrSpace::AddrSpace(OpenFile *executable)
 {
-    NoffHeader noffH;
     unsigned int i, size;
+#ifdef VM
+    NoffHeader &hdr = this->noffH;// se guarda directo en el miembro, se necesita durante toda la vida del proceso para poder cargar paginas bajo demanda mas adelante
+#else
+    NoffHeader hdr;
+#endif
  
-    executable->ReadAt((char *)&noffH, sizeof(noffH), 0);
-    if ((noffH.noffMagic != NOFFMAGIC) &&
-        (WordToHost(noffH.noffMagic) == NOFFMAGIC))
-        SwapHeader(&noffH);
-    ASSERT(noffH.noffMagic == NOFFMAGIC);
+    executable->ReadAt((char *)&hdr, sizeof(hdr), 0);
+    if ((hdr.noffMagic != NOFFMAGIC) &&
+        (WordToHost(hdr.noffMagic) == NOFFMAGIC))
+        SwapHeader(&hdr);
+    ASSERT(hdr.noffMagic == NOFFMAGIC);
  
     // how big is address space?
-    size = noffH.code.size + noffH.initData.size + noffH.uninitData.size
+    size = hdr.code.size + hdr.initData.size + hdr.uninitData.size
            + UserStackSize;
  
     numPages = divRoundUp(size, PageSize);
     size = numPages * PageSize;
  
+#ifdef VM
+ 
+    DEBUG('a', "Initializing address space, num pages %d, size %d\n",
+          numPages, size);
+ 
+    executableFile = executable;
+    pageTable = new TranslationEntry[numPages];
+    pageType  = new PageType[numPages];
+    swapSlot  = new int[numPages];
+ 
+    for (i = 0; i < numPages; i++) {
+        pageTable[i].virtualPage  = i;
+        pageTable[i].physicalPage = -1;
+        pageTable[i].valid        = false;
+        pageTable[i].use          = false;
+        pageTable[i].dirty        = false;
+        pageTable[i].readOnly     = false;
+ 
+        pageType[i] = ClassifyPage(i, &hdr, numPages);
+        swapSlot[i] = NoSwapPage;
+    }
+#else
     // verificamos que hay suficiente memoria fṕisica para cargar el programa
     ASSERT(numPages <= NumPhysPages);
     ASSERT((int)numPages <= machine->freeMap->NumClear());
@@ -98,46 +165,91 @@ AddrSpace::AddrSpace(OpenFile *executable)
     }
  
     // se carga el segmento de código pagina por página
-    if (noffH.code.size > 0) {
+    if (hdr.code.size > 0) {
         DEBUG('a', "Initializing code segment, at 0x%x, size %d\n",
-          noffH.code.virtualAddr, noffH.code.size);
-
-        int numCodePages = divRoundUp(noffH.code.size, PageSize);
+          hdr.code.virtualAddr, hdr.code.size);
+ 
+        int numCodePages = divRoundUp(hdr.code.size, PageSize);
         for (int i = 0; i < numCodePages; i++) {
-            int vpn      = (noffH.code.virtualAddr / PageSize) + i;
+            int vpn      = (hdr.code.virtualAddr / PageSize) + i;
             int physAddr = pageTable[vpn].physicalPage * PageSize;
-            int fileAddr = noffH.code.inFileAddr + i * PageSize;
+            int fileAddr = hdr.code.inFileAddr + i * PageSize;
             executable->ReadAt(&(machine->mainMemory[physAddr]), PageSize, fileAddr);
         }
     }   
     //segmento de datos pagina por pagina
-    if (noffH.initData.size > 0) {
+    if (hdr.initData.size > 0) {
         DEBUG('a', "Initializing data segment, at 0x%x, size %d\n",
-          noffH.initData.virtualAddr, noffH.initData.size);
-
-        int numDataPages = divRoundUp(noffH.initData.size, PageSize);
+          hdr.initData.virtualAddr, hdr.initData.size);
+ 
+        int numDataPages = divRoundUp(hdr.initData.size, PageSize);
         for (int i = 0; i < numDataPages; i++) {
-            int vpn      = (noffH.initData.virtualAddr / PageSize) + i;
+            int vpn      = (hdr.initData.virtualAddr / PageSize) + i;
             int physAddr = pageTable[vpn].physicalPage * PageSize;
-            int fileAddr = noffH.initData.inFileAddr + i * PageSize;
+            int fileAddr = hdr.initData.inFileAddr + i * PageSize;
             executable->ReadAt(&(machine->mainMemory[physAddr]), PageSize, fileAddr);
         }
     }
- 
+#endif
 }
-
+ 
 //----------------------------------------------------------------------
 // AddrSpace::AddrSpace (copy constructor)
 //  Crea una copia del espacio de direcciones de otro proceso (para Fork).
 //  Asigna nuevos frames físicos y copia el contenido de memoria.
 //----------------------------------------------------------------------
-
+ 
 AddrSpace::AddrSpace(AddrSpace *other)
 {
     numPages = other->numPages;
-
+ 
+#ifdef VM
+    noffH          = other->noffH;
+    executableFile = other->executableFile;
+    pageTable = new TranslationEntry[numPages];
+    pageType  = new PageType[numPages];
+    swapSlot  = new int[numPages];
+ 
+    for (unsigned int i = 0; i < numPages; i++) {
+        pageType[i] = other->pageType[i];
+        swapSlot[i] = NoSwapPage;
+ 
+        pageTable[i].virtualPage  = i;
+        pageTable[i].physicalPage = -1;
+        pageTable[i].valid        = false;
+        pageTable[i].use          = false;
+        pageTable[i].dirty        = false;
+        pageTable[i].readOnly     = false;
+ 
+        if (!other->pageTable[i].valid && other->swapSlot[i] == NoSwapPage)
+            continue;      // el padre nunca ha tocado esta pagina, el hijo tampoco la necesita todavia
+ 
+        int frame = frameTable->AllocFrame(this, i);
+        while (frame == -1) {
+            int victimFrame = frameTable->PickVictim();
+            AddrSpace *victimOwner = frameTable->GetOwner(victimFrame);
+            int victimVpn = frameTable->GetVPN(victimFrame);
+            victimOwner->EvictPage(victimVpn);
+            frameTable->FreeFrame(victimFrame);
+            frame = frameTable->AllocFrame(this, i);
+        }
+ 
+        char *dest = &(machine->mainMemory[frame * PageSize]);
+        if (other->pageTable[i].valid) {
+            // el padre la tiene en memoria, se copia directamente de ahi
+            int srcPhys = other->pageTable[i].physicalPage * PageSize;
+            memcpy(dest, &(machine->mainMemory[srcPhys]), PageSize);
+        } else {
+            // el padre la tiene en SWAP, se lee de ahi
+            swapSpace->ReadPage(other->swapSlot[i], dest);
+        }
+ 
+        pageTable[i].physicalPage = frame;
+        pageTable[i].valid        = true;
+    }
+#else
     ASSERT((int)numPages <= machine->freeMap->NumClear());
-
+ 
     pageTable = new TranslationEntry[numPages];
     for (unsigned int i = 0; i < numPages; i++) {
         pageTable[i].virtualPage  = i;
@@ -146,16 +258,17 @@ AddrSpace::AddrSpace(AddrSpace *other)
         pageTable[i].use          = false;
         pageTable[i].dirty        = false;
         pageTable[i].readOnly     = false;
-
-        // Copia el contenido del frame original al nuevo frame
+ 
+        //se copia el contenido del frame original al nuevo frame
         int srcPhys  = other->pageTable[i].physicalPage * PageSize;
         int destPhys = pageTable[i].physicalPage * PageSize;
         memcpy(machine->mainMemory + destPhys,
                machine->mainMemory + srcPhys,
                PageSize);
     }
+#endif
 }
-
+ 
 //----------------------------------------------------------------------
 // AddrSpace::~AddrSpace
 // 	Deallocate an address space, including anything it loaded into memory.
@@ -165,10 +278,21 @@ AddrSpace::AddrSpace(AddrSpace *other)
  
 AddrSpace::~AddrSpace()
 {
+#ifdef VM
+    for (unsigned int i = 0; i < numPages; i++) {
+        if (pageTable[i].valid)
+            frameTable->FreeFrame(pageTable[i].physicalPage);
+        if (swapSlot[i] != NoSwapPage)
+            swapSpace->Free(swapSlot[i]);
+    }
+    delete [] pageType;
+    delete [] swapSlot;
+#else
     // se liberan las paginas asignadas al proceso en el freeMap
     for (unsigned int i = 0; i < numPages; i++) {
         machine->freeMap->Clear(pageTable[i].physicalPage);
     }
+#endif
     delete [] pageTable;
 }
  
@@ -224,6 +348,76 @@ void AddrSpace::SaveState()
  
 void AddrSpace::RestoreState()
 {
+#ifdef VM
+    for (int i = 0; i < TLBSize; i++)
+        machine->tlb[i].valid = false;
+#else
     machine->pageTable     = pageTable;
     machine->pageTableSize = numPages;
+#endif
 }
+ 
+#ifdef VM
+
+void
+AddrSpace::LoadPage(unsigned int vpn)
+{
+    ASSERT(vpn < numPages);
+    ASSERT(!pageTable[vpn].valid);
+ 
+    int frame = frameTable->AllocFrame(this, vpn);
+    while (frame == -1) {
+        // memoria fisica llena, entonces hay que sacar una victima primero
+        int victimFrame = frameTable->PickVictim();
+        AddrSpace *victimOwner = frameTable->GetOwner(victimFrame);
+        int victimVpn = frameTable->GetVPN(victimFrame);
+ 
+        victimOwner->EvictPage(victimVpn);
+        frameTable->FreeFrame(victimFrame);
+ 
+        frame = frameTable->AllocFrame(this, vpn);
+    }
+ 
+    char *dest = &(machine->mainMemory[frame * PageSize]);
+    PageType type = pageType[vpn];
+ 
+    if (swapSlot[vpn] != NoSwapPage) {
+        swapSpace->ReadPage(swapSlot[vpn], dest);
+    } else {
+        FillPageContent(dest, vpn, type, &noffH, executableFile);
+    }
+ 
+    pageTable[vpn].virtualPage  = vpn;
+    pageTable[vpn].physicalPage = frame;
+    pageTable[vpn].valid        = true;
+    pageTable[vpn].use          = false;
+    pageTable[vpn].dirty        = false;
+    pageTable[vpn].readOnly     = (type == PAGE_CODE);
+ 
+    stats->numPageFaults++; //se movio una pagina de verdad
+}
+ 
+void
+AddrSpace::EvictPage(unsigned int vpn)
+{
+    TranslationEntry *pte = &pageTable[vpn];
+    ASSERT(pte->valid);
+ 
+    PageType type = pageType[vpn];
+    if (type != PAGE_CODE && pte->dirty) {
+        if (swapSlot[vpn] == NoSwapPage)
+            swapSlot[vpn] = swapSpace->Allocate();
+        swapSpace->WritePage(swapSlot[vpn],
+                              &(machine->mainMemory[pte->physicalPage * PageSize]));
+    }
+ 
+    if (currentThread->space == this) {
+        for (int i = 0; i < TLBSize; i++) {
+            if (machine->tlb[i].valid && machine->tlb[i].virtualPage == (int)vpn)
+                machine->tlb[i].valid = false;
+        }
+    }
+ 
+    pte->valid = false;
+}
+#endif // VM

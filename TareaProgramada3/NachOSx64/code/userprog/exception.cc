@@ -76,7 +76,9 @@ static void ExecThread(void* arg) {
     OpenFile* executable = (OpenFile*) arg;
 
     AddrSpace* space = new AddrSpace( executable );
+    #ifndef VM
     delete executable;
+    #endif
 
     currentThread->space = space;
     space->InitRegisters();
@@ -746,7 +748,32 @@ ExceptionHandler(ExceptionType which)
           break;
 
        case PageFaultException: {
-          break;
+        #ifdef VM
+            int badVAddr = machine->ReadRegister(BadVAddrReg);
+            unsigned int vpn = (unsigned) badVAddr / PageSize;
+
+            AddrSpace *space = currentThread->space;
+            ASSERT(space != NULL);
+            ASSERT(vpn < space->getNumPages());
+
+            TranslationEntry *pte = space->GetPageTableEntry(vpn);
+
+            if (!pte->valid) {
+                space->LoadPage(vpn);
+            }
+
+            int slot = -1;
+            for (int i = 0; i < TLBSize; i++) {
+                if (!machine->tlb[i].valid) { slot = i; break; }
+            }
+            if (slot == -1) {
+                static int tlbClock = 0;
+                slot = tlbClock;
+                tlbClock = (tlbClock + 1) % TLBSize;
+            }
+            machine->tlb[slot] = *pte;
+        #endif
+            break;
        }
 
        case ReadOnlyException:

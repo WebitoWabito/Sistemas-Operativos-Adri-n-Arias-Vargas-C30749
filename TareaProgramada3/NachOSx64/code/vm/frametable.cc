@@ -4,6 +4,7 @@
 #include "copyright.h"
 #include "system.h"
 #include "frametable.h"
+#include "addrspace.h"
 
 FrameTable::FrameTable()
 {
@@ -12,6 +13,7 @@ FrameTable::FrameTable()
         frames[i].owner = NULL;
         frames[i].vpn   = -1;
     }
+    clockHand = 0;
 }
  
 FrameTable::~FrameTable()
@@ -48,4 +50,23 @@ FrameTable::FreeFrame(int frame)
     frames[frame].free  = true;
     frames[frame].owner = NULL;
     frames[frame].vpn   = -1;
+}
+
+int
+FrameTable::PickVictim()
+{
+    for (;;) {
+        FrameEntry &f = frames[clockHand];
+        if (!f.free) {
+            TranslationEntry *pte = f.owner->GetPageTableEntry(f.vpn);
+            if (pte->use) {
+                pte->use = false;//second chance
+            } else {
+                int victim = clockHand;
+                clockHand = (clockHand + 1) % NumPhysPages;
+                return victim;
+            }
+        }
+        clockHand = (clockHand + 1) % NumPhysPages;
+    }
 }

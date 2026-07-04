@@ -38,8 +38,9 @@ StartProcess(const char *filename)
     openFilesTable = new NachosOpenFilesTable();
     openFilesTable->addThread();         
 
-
-    delete executable;			// close file
+    #ifndef VM
+    delete executable;// close file
+    #endif
 
     currentThread->space->InitRegisters();		// set the initial register values
     currentThread->space->RestoreState();		// load page table register

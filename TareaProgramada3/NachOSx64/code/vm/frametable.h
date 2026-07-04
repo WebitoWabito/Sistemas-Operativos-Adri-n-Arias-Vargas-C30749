@@ -23,11 +23,13 @@ class FrameTable {
     void FreeFrame(int frame);//se marca el frame como libre
     bool HasFreeFrame();
     AddrSpace *GetOwner(int frame) { return frames[frame].owner; }
-    int        GetVPN(int frame)   { return frames[frame].vpn; }
+    int GetVPN(int frame)   { return frames[frame].vpn; }
+    int PickVictim();//se escoge un frame para reemplazar cuando la memoria esta llena, por ahora implementado con second chance para pruebas, pero se va a cambiar a LRU
     int NumFrames() { return NumPhysPages; }
  
   private:
     FrameEntry frames[NumPhysPages];
+    int clockHand;
 };
  
 #endif

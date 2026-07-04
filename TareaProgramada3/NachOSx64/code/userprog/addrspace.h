@@ -9,15 +9,20 @@
 // Copyright (c) 1992-1993 The Regents of the University of California.
 // All rights reserved.  See copyright.h for copyright notice and limitation 
 // of liability and disclaimer of warranty provisions.
-
+ 
 #ifndef ADDRSPACE_H
 #define ADDRSPACE_H
-
+ 
 #include "copyright.h"
 #include "filesys.h"
-
+#include "noff.h"
+ 
+#ifdef VM
+#include "vm.h"
+#endif
+ 
 #define UserStackSize		4096 	// increase this as necessary!
-
+ 
 class AddrSpace {
   public:
     AddrSpace(OpenFile *executable);	// Create an address space,
@@ -25,20 +30,39 @@ class AddrSpace {
 					// stored in the file "executable"
     AddrSpace(AddrSpace *other);	// Copy constructor para Fork
     ~AddrSpace();			// De-allocate an address space
-
+ 
     void InitRegisters();		// Initialize user-level CPU registers,
 					// before jumping to user code
-
+ 
     void SaveState();			// Save/restore address space-specific
     void RestoreState();		// info on a context switch
-
+ 
     unsigned int getNumPages() { return numPages; }
-
+ 
+#ifdef VM
+    TranslationEntry *GetPageTableEntry(unsigned int vpn) {
+        return &pageTable[vpn];
+    }
+ 
+    PageType GetPageType(unsigned int vpn) { return pageType[vpn]; }
+    //resuelve falta de pag real
+    void LoadPage(unsigned int vpn);
+    //Saca la pagina vpn de memoria principal
+    void EvictPage(unsigned int vpn);
+#endif
+ 
   private:
     TranslationEntry *pageTable;	// Assume linear page table translation
 					// for now!
     unsigned int numPages;		// Number of pages in the virtual 
 					// address space
+ 
+#ifdef VM
+    OpenFile *executableFile;//para poder leer paginas bajo demanda
+    NoffHeader noffH;// cabecera del ejecutable (offsets/tamaños)
+    PageType *pageType;//tipo de cada pagina virtual (texto, datos inic, Datos no inic, pila)
+    int *swapSlot;	// pagina de SWAP de cada pagina virtual
+#endif
 };
-
+ 
 #endif // ADDRSPACE_H
