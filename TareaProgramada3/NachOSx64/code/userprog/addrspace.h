@@ -59,9 +59,9 @@ class AddrSpace {
  
 #ifdef VM
     OpenFile *executableFile;//para poder leer paginas bajo demanda
-    NoffHeader noffH;// cabecera del ejecutable (offsets/tamaños)
+    NoffHeader noffH;
     PageType *pageType;//tipo de cada pagina virtual (texto, datos inic, Datos no inic, pila)
-    int *swapSlot;	// pagina de SWAP de cada pagina virtual
+    int *swapSlot;	//pagina de swap de cada pagina virtual
 #endif
 };
  

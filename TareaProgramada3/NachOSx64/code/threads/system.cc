@@ -13,6 +13,7 @@
 // These are all initialized and de-allocated by this file.
 
 Thread *currentThread;			// the thread we are running now
+Thread *processTable[MAX_PROCESSES];
 Thread *threadToBeDestroyed;  		// the thread that just finished
 Scheduler *scheduler;			// the ready list
 Interrupt *interrupt;			// interrupt status
@@ -34,11 +35,12 @@ SynchDisk   *synchDisk;
 
 #ifdef USER_PROGRAM	// requires either FILESYS or FILESYS_STUB
 Machine *machine;	// user program memory and registers
-#endif
-
+ 
 #ifdef VM
 SwapSpace  *swapSpace;
 FrameTable *frameTable;
+int lruClock;
+#endif
 #endif
 
 #ifdef NETWORK
@@ -170,6 +172,8 @@ Initialize(int argc, char **argv)
     // object to save its state. 
     currentThread = new Thread("main");		
     currentThread->setStatus(RUNNING);
+    for (int i = 0; i < MAX_PROCESSES; i++)
+        processTable[i] = NULL;
 
     interrupt->Enable();
     CallOnUserAbort(Cleanup);			// if user hits ctl-C
@@ -196,6 +200,7 @@ Initialize(int argc, char **argv)
 #ifdef VM
     swapSpace  = new SwapSpace();
     frameTable = new FrameTable();
+    lruClock   = 0;
 #endif
 
 #ifdef NETWORK

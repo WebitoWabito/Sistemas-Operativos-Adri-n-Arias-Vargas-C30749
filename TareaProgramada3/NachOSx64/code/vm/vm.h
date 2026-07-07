@@ -7,8 +7,7 @@
 #include "copyright.h"
  
 //Tipo de cada pagina virtual que usamos para decidir de donderecuperamos
-// una pagina faltante y si esa pagina puede o no enviarse
-// a swap
+// una pagina faltante y si esa pagina puede o no enviarse a swap
 enum PageType {
     PAGE_CODE,
     PAGE_INIT_DATA,

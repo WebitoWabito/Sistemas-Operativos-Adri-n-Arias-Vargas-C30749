@@ -23,6 +23,8 @@ extern void Cleanup();				// Cleanup, called when
 						// Nachos is done.
 
 extern Thread *currentThread;			// the thread holding the CPU
+#define MAX_PROCESSES 128
+extern Thread *processTable[MAX_PROCESSES];
 extern Thread *threadToBeDestroyed;  		// the thread that just finished
 extern Scheduler *scheduler;			// the ready list
 extern Interrupt *interrupt;			// interrupt status
@@ -44,6 +46,7 @@ extern FileSystem  *fileSystem;
 #include "frametable.h"
 extern SwapSpace  *swapSpace;
 extern FrameTable *frameTable;
+extern int lruClock;
 #endif
 
 #ifdef FILESYS

@@ -76,9 +76,9 @@ static void ExecThread(void* arg) {
     OpenFile* executable = (OpenFile*) arg;
 
     AddrSpace* space = new AddrSpace( executable );
-    #ifndef VM
+#ifndef VM
     delete executable;
-    #endif
+#endif
 
     currentThread->space = space;
     space->InitRegisters();
@@ -117,9 +117,15 @@ void NachOS_Exec() {		// System call 2
 
     Thread* newThread = new Thread( nombre );
     openFilesTable->addThread();
+    int spaceId = -1;
+    for (int slotIdx = 0; slotIdx < MAX_PROCESSES; slotIdx++) {
+        if (processTable[slotIdx] == NULL) { spaceId = slotIdx; break; }
+    }
+    ASSERT(spaceId != -1);// se acabaron los slots de processTable
+    processTable[spaceId] = newThread;
 
-    //Retorna el id del hilo al proceso padre como SpaceId
-    machine->WriteRegister( 2, (int)(long) newThread );
+    //retorna el id del hilo al proceso padre como SpaceId
+    machine->WriteRegister( 2, spaceId );
     returnFromSystemCall();
 
     newThread->Fork( ExecThread, (void*) executable );
@@ -131,14 +137,16 @@ void NachOS_Exec() {		// System call 2
  */
 void NachOS_Join() {		// System call 3
     DEBUG('u', "Join system call\n");
-
-    // spaceid es el puntero al thread hijo que retorna exec
-    Thread* child = (Thread*)(long) machine->ReadRegister( 4 );
+    int spaceId = machine->ReadRegister( 4 );
+    ASSERT(spaceId >= 0 && spaceId < MAX_PROCESSES);
+    Thread* child = processTable[spaceId];
+    ASSERT(child != NULL);
 
     //se espera que el hijo haga exit, V en joinSemaphore
     child->joinSemaphore->P();
 
     machine->WriteRegister( 2, child->exitStatus );
+    processTable[spaceId] = NULL;// se libera el slot
     returnFromSystemCall();
 }
 
@@ -201,10 +209,10 @@ void NachOS_Open() {          // System call 5
  
     int nachosHandle = -1;
     if ( unixFd != -1 ) {
-        // se registra en la tabla
+        //se registra en la tabla
         nachosHandle = openFilesTable->Open( unixFd );
         if ( nachosHandle == -1 ) {
-            // si está llena la tabla se cierra 
+            //si está llena la tabla se cierra 
             close( unixFd );
         }
     }
@@ -232,7 +240,7 @@ void NachOS_Write() {         // System call 7
  
         case ConsoleOutput:
         case ConsoleError: {
-            // para consola copiamos byte a byte (size suele ser pequeno)
+            // para consola copiamos byte a byte
             int car;
             char * buffer = new char[ size + 1 ];
             for ( int i = 0; i < size; i++ ) {
@@ -254,14 +262,14 @@ void NachOS_Write() {         // System call 7
             if ( !openFilesTable->isOpened( descriptor ) ) {
                 machine->WriteRegister( 2, -1 );
             } else {
-                // copiar pagina por pagina usando memoria fisica directamente
+                //copiar pagina por pagina usando memoria fisica directamente
                 int unixFd = openFilesTable->getUnixHandle( descriptor );
                 int totalWritten = 0;
                 int remaining = size;
                 int virtAddr = addr;
                 while ( remaining > 0 ) {
                     int physAddr;
-                    // calcular cuanto podemos escribir en esta pagina
+                    // se calcula cuanto podemos escribir en esta pagina
                     int offset = virtAddr % PageSize;
                     int chunk = PageSize - offset;
                     if ( chunk > remaining ) chunk = remaining;
@@ -294,7 +302,7 @@ void NachOS_Read() {        // System call 6
 
     switch ( descriptor ) {
         case ConsoleInput: {
-            // para stdin copiamos byte a byte (interactivo)
+            //para stdin copiamos byte a byte
             unsigned char * buffer = new unsigned char[ size + 1 ];
             for ( int i = 0; i < size; i++ ) {
                 buffer[i] = (unsigned char) getchar();
@@ -303,6 +311,10 @@ void NachOS_Read() {        // System call 6
             buffer[bytesRead] = '\0';
             for ( int i = 0; i < bytesRead; i++ ) {
                 machine->WriteMem( addr + i, 1, (int) buffer[i] );
+            }
+            for ( int i = 0; i < bytesRead; i++ ) {
+                int check;
+                machine->ReadMem( addr + i, 1, &check );
             }
             machine->WriteRegister( 2, bytesRead );
             delete [] buffer;
@@ -317,7 +329,7 @@ void NachOS_Read() {        // System call 6
             if ( !openFilesTable->isOpened( descriptor ) ) {
                 machine->WriteRegister( 2, -1 );
             } else {
-                // leer del archivo y copiar pagina por pagina a memoria fisica
+                //leer del archivo y copiar pagina por pagina a memoria fisica
                 int unixFd = openFilesTable->getUnixHandle( descriptor );
                 int remaining = size;
                 int virtAddr  = addr;
@@ -383,9 +395,6 @@ static void ForkThread(void* arg) {
 
     machine->WriteRegister( PCReg,     args->funcAddr );
     machine->WriteRegister( NextPCReg, args->funcAddr + 4 );
-
-    //stack propio al final del espacio virtual con offset para no chocar con el padre
-    // tope con desplazamiento de 256 bytes
     int stackTop = args->space->getNumPages() * PageSize - 16;
     machine->WriteRegister( StackReg, stackTop - 256 );
 
@@ -636,7 +645,8 @@ void NachOS_Shutdown() {	// System call 25
 void
 ExceptionHandler(ExceptionType which)
 {
-    int type = machine->ReadRegister(2) - SC_Base;
+    int r2 = machine->ReadRegister(2);
+    int type = (r2 >= SC_Base) ? (r2 - SC_Base) : r2;
 
     switch ( which ) {
 
@@ -748,32 +758,54 @@ ExceptionHandler(ExceptionType which)
           break;
 
        case PageFaultException: {
-        #ifdef VM
-            int badVAddr = machine->ReadRegister(BadVAddrReg);
-            unsigned int vpn = (unsigned) badVAddr / PageSize;
+#ifdef VM
+          stats->numPageFaultExceptions++;
+          lruClock++;//cada exception vaa ser un tick logico para lru
 
-            AddrSpace *space = currentThread->space;
-            ASSERT(space != NULL);
-            ASSERT(vpn < space->getNumPages());
+          int badVAddr = machine->ReadRegister(BadVAddrReg);
+          unsigned int vpn = (unsigned) badVAddr / PageSize;
 
-            TranslationEntry *pte = space->GetPageTableEntry(vpn);
+          AddrSpace *space = currentThread->space;
+          ASSERT(space != NULL);
+          ASSERT(vpn < space->getNumPages());
 
-            if (!pte->valid) {
-                space->LoadPage(vpn);
-            }
+          TranslationEntry *pte = space->GetPageTableEntry(vpn);
 
-            int slot = -1;
-            for (int i = 0; i < TLBSize; i++) {
-                if (!machine->tlb[i].valid) { slot = i; break; }
-            }
-            if (slot == -1) {
-                static int tlbClock = 0;
-                slot = tlbClock;
-                tlbClock = (tlbClock + 1) % TLBSize;
-            }
-            machine->tlb[slot] = *pte;
-        #endif
-            break;
+          if (!pte->valid) {
+              // falta de pagina de verdad, se trae a memoria del swap
+              space->LoadPage(vpn);
+          }
+
+          frameTable->Touch(pte->physicalPage);//LRU de marcos fisicos
+          static int tlbLastUsed[TLBSize];
+          static bool tlbInit = false;
+          if (!tlbInit) {
+              for (int i = 0; i < TLBSize; i++) tlbLastUsed[i] = 0;
+              tlbInit = true;
+          }
+
+          int slot = -1;
+          for (int i = 0; i < TLBSize; i++) {
+              if (!machine->tlb[i].valid) { slot = i; break; }
+          }
+          if (slot == -1) {
+              slot = 0;
+              for (int i = 1; i < TLBSize; i++) {
+                  if (tlbLastUsed[i] < tlbLastUsed[slot])
+                      slot = i;
+              }
+          }
+          if (machine->tlb[slot].valid) {
+              TranslationEntry *oldPte =
+                  space->GetPageTableEntry(machine->tlb[slot].virtualPage);
+              oldPte->use   = machine->tlb[slot].use;
+              oldPte->dirty = machine->tlb[slot].dirty;
+          }
+
+          machine->tlb[slot] = *pte;
+          tlbLastUsed[slot]  = lruClock;
+#endif
+          break;
        }
 
        case ReadOnlyException:

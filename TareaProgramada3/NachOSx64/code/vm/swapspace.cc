@@ -27,7 +27,7 @@ SwapSpace::~SwapSpace()
 int SwapSpace::Allocate()
 {
     int page = freeMap->Find();
-    ASSERT(page != -1);// si esto revienta hay que subir SwapSize
+    ASSERT(page != -1);
     if (page + 1 > maxUsed)
         maxUsed = page + 1;
  
@@ -40,7 +40,7 @@ void SwapSpace::Free(int swapPage)
     freeMap->Clear(swapPage);
 }
 
-//Se cuentan como accesos a disco (numDiskReads / numDiskWrites)
+//se cuentan como accesos a disco numDiskReads y numDiskWrites
 void SwapSpace::ReadPage(int swapPage, char *into)
 {
     ASSERT(swapPage >= 0 && swapPage < SwapSize);
